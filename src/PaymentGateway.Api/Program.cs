@@ -1,4 +1,6 @@
+using PaymentGateway.Api.Extensions;
 using PaymentGateway.Api.Services;
+using PaymentGateway.Api.Services.Interfaces;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,7 +11,13 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+// Register repositories and services
 builder.Services.AddSingleton<PaymentsRepository>();
+builder.Services.AddBankClient(builder.Configuration);
+builder.Services.AddScoped<IPaymentService, PaymentService>();
+
+// Add logging
+builder.Services.AddLogging();
 
 var app = builder.Build();
 

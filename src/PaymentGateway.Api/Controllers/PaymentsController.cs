@@ -1,26 +1,54 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 
+using PaymentGateway.Api.Models.Requests;
 using PaymentGateway.Api.Models.Responses;
-using PaymentGateway.Api.Services;
+using PaymentGateway.Api.Services.Interfaces;
 
 namespace PaymentGateway.Api.Controllers;
 
 [Route("api/[controller]")]
 [ApiController]
-public class PaymentsController : Controller
+public class PaymentsController : ControllerBase
 {
-    private readonly PaymentsRepository _paymentsRepository;
+    private readonly IPaymentService _paymentService;
+    private readonly ILogger<PaymentsController> _logger;
 
-    public PaymentsController(PaymentsRepository paymentsRepository)
+    public PaymentsController(IPaymentService paymentService, ILogger<PaymentsController> logger)
     {
-        _paymentsRepository = paymentsRepository;
+        _paymentService = paymentService;
+        _logger = logger;
     }
 
-    [HttpGet("{id:guid}")]
-    public async Task<ActionResult<PostPaymentResponse?>> GetPaymentAsync(Guid id)
+    [HttpPost]
+    public async Task<ActionResult<PostPaymentResponse>> ProcessPaymentAsync([FromBody] PostPaymentRequest request)
     {
-        var payment = _paymentsRepository.Get(id);
+        if (!ModelState.IsValid)
+        {
+            return BadRequest(ModelState);
+        }
 
-        return new OkObjectResult(payment);
+        var (response, errors) = await _paymentService.ProcessPaymentAsync(request);
+
+        if (errors.Any())
+        {
+            _logger.LogWarning("Payment rejected: {Errors}", string.Join(", ", errors));
+            return BadRequest(new { Errors = errors });
+        }
+        
+        return CreatedAtRoute("GetPayment", new { id = response.Id }, response);
+    }
+
+    [HttpGet("{id:guid}", Name = "GetPayment")]
+    public ActionResult<GetPaymentResponse> GetPaymentAsync(Guid id)
+    {
+        var payment = _paymentService.GetPayment(id);
+
+        if (payment == null)
+        {
+            _logger.LogWarning("Payment with ID {PaymentId} not found", id);
+            return NotFound();
+        }
+
+        return Ok(payment);
     }
 }
