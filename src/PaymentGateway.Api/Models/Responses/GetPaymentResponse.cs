@@ -9,4 +9,5 @@ public class GetPaymentResponse
     public int ExpiryYear { get; set; }
     public string Currency { get; set; }
     public int Amount { get; set; }
+    public List<string> ValidationErrors { get; set; } = new List<string>();
 }

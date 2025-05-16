@@ -1,6 +1,9 @@
 ﻿using PaymentGateway.Api.Exceptions;
+using PaymentGateway.Api.Extensions;
 using PaymentGateway.Api.Models.Bank;
 using PaymentGateway.Api.Services.Interfaces;
+
+using Polly;
 
 using System.Text.Json;
 
@@ -49,13 +52,28 @@ namespace PaymentGateway.Api.Services.Clients
             }
             catch (HttpRequestException ex)
             {
-                _logger.LogError(ex, "Error communicating with bank");
-                throw new BankClientException("Error communicating with bank", ex);
+                _logger.LogError(ex, "Network error communicating with bank");
+                throw new BankClientException("Network error communicating with bank", ex);
+            }
+            catch (TaskCanceledException ex)
+            {
+                _logger.LogError(ex, "Timeout communicating with bank");
+                throw new BankClientException("Request to bank timed out", ex);
             }
             catch (JsonException ex)
             {
                 _logger.LogError(ex, "Error parsing bank response");
                 throw new BankClientException("Error parsing bank response", ex);
+            }
+            catch (BankClientException)
+            {
+                // Just rethrow - we've already logged these
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unexpected error during bank communication");
+                throw new BankClientException("Unexpected error during bank communication", ex);
             }
         }
     }

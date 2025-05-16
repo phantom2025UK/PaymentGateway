@@ -1,4 +1,5 @@
 using PaymentGateway.Api.Extensions;
+using PaymentGateway.Api.Models.Configuration;
 using PaymentGateway.Api.Services;
 using PaymentGateway.Api.Services.Interfaces;
 
@@ -11,9 +12,14 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+// Register configuration
+builder.Services.Configure<PaymentGatewayConfig>(
+    builder.Configuration.GetSection("PaymentGateway"));
+
 // Register repositories and services
 builder.Services.AddSingleton<PaymentsRepository>();
 builder.Services.AddBankClient(builder.Configuration);
+builder.Services.AddScoped<IPaymentValidationService, PaymentValidationService>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 
 // Add logging

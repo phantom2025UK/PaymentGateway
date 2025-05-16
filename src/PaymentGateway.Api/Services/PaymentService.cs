@@ -4,6 +4,8 @@ using PaymentGateway.Api.Models.Requests;
 using PaymentGateway.Api.Models.Responses;
 using PaymentGateway.Api.Models;
 using PaymentGateway.Api.Services.Interfaces;
+using PaymentGateway.Api.Models.Configuration;
+using Microsoft.Extensions.Options;
 
 namespace PaymentGateway.Api.Services
 {
@@ -11,22 +13,34 @@ namespace PaymentGateway.Api.Services
     {
         private readonly IBankClient _bankClient;
         private readonly PaymentsRepository _paymentsRepository;
+        private readonly IPaymentValidationService _validationService;
         private readonly ILogger<PaymentService> _logger;
 
-        public PaymentService(IBankClient bankClient, PaymentsRepository paymentsRepository, ILogger<PaymentService> logger)
+        private readonly PaymentGatewayConfig _config;
+
+        public PaymentService(IBankClient bankClient, PaymentsRepository paymentsRepository,
+                              IPaymentValidationService validationService,
+                              ILogger<PaymentService> logger, 
+                              IOptions<PaymentGatewayConfig> config)
         {
             _bankClient = bankClient;
             _paymentsRepository = paymentsRepository;
             _logger = logger;
+            _validationService = validationService;
+            _config = config.Value;
         }
 
-        public async Task<(PostPaymentResponse, List<string>)> ProcessPaymentAsync(PostPaymentRequest request)
+        public async Task<PostPaymentResponse> ProcessPaymentAsync(PostPaymentRequest request)
         {
             // Validate the request
-            var validationErrors = ValidateRequest(request);
+            var validationErrors = _validationService.ValidatePaymentRequest(request);
             if (validationErrors.Any())
             {
-                return (null, validationErrors);
+                _logger.LogWarning("Payment rejected: {Errors}", string.Join(", ", validationErrors));
+                
+                var rejectedResponse = CreateRejectedPayment(request, validationErrors);
+
+                return rejectedResponse;
             }
 
             try
@@ -59,18 +73,22 @@ namespace PaymentGateway.Api.Services
                 // Store the payment
                 _paymentsRepository.Add(paymentResponse);
 
-                return (paymentResponse, new List<string>());
+                return paymentResponse;
             }
             catch (BankClientException ex)
             {
                 _logger.LogWarning(ex, "Bank client error during payment processing");
-                // Return a rejected payment status with error message
-                return (null, new List<string> { ex.Message });
+                
+                var rejectedResponse = CreateRejectedPayment(request, new List<string> { ex.Message });
+                return rejectedResponse;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Unexpected error during payment processing");
-                return (null, new List<string> { "An unexpected error occurred processing the payment" });
+                var err = "Unexpected error during payment processing";
+                _logger.LogError(ex, err);
+                
+                var rejectedResponse = CreateRejectedPayment(request, new List<string> { err });
+                return rejectedResponse;
             }
         }
 
@@ -91,60 +109,31 @@ namespace PaymentGateway.Api.Services
                 ExpiryMonth = payment.ExpiryMonth,
                 ExpiryYear = payment.ExpiryYear,
                 Currency = payment.Currency,
-                Amount = payment.Amount
+                Amount = payment.Amount,
+                ValidationErrors = payment.ValidationErrors
             };
         }
 
-        private List<string> ValidateRequest(PostPaymentRequest request)
+        public PostPaymentResponse CreateRejectedPayment(PostPaymentRequest request, List<string> validationErrors)
         {
-            var errors = new List<string>();
+            var rejectedResponse = new PostPaymentResponse
+            {
+                Id = Guid.NewGuid(),
+                Status = PaymentStatus.Rejected,
+                CardNumberLastFour = request.CardNumber?.Length >= 4
+                    ? int.Parse(request.CardNumber.Substring(request.CardNumber.Length - 4))
+                    : 0,
+                ExpiryMonth = request.ExpiryMonth,
+                ExpiryYear = request.ExpiryYear,
+                Currency = request.Currency,
+                Amount = request.Amount,
+                ValidationErrors = validationErrors
+            };
 
-            // Card number validation (addition to annotation validation)
-            if (string.IsNullOrWhiteSpace(request.CardNumber) || !request.CardNumber.All(char.IsDigit))
-            {
-                errors.Add("Card number must contain only digits");
-            }
-            else if (request.CardNumber.Length < 14 || request.CardNumber.Length > 19)
-            {
-                errors.Add("Card number must be between 14 and 19 digits");
-            }
+            // Store the rejected payment
+            _paymentsRepository.Add(rejectedResponse);
 
-            // Expiry date validation (check if in the future)
-            var today = DateTime.Today;
-            var expiryDate = new DateTime(request.ExpiryYear, request.ExpiryMonth, 1).AddMonths(1).AddDays(-1);
-            if (expiryDate <= today)
-            {
-                errors.Add("Card expiration date must be in the future");
-            }
-
-            // Currency validation
-            var validCurrencies = new[] { "USD", "GBP", "EUR" };
-            if (string.IsNullOrWhiteSpace(request.Currency) || !validCurrencies.Contains(request.Currency))
-            {
-                errors.Add($"Currency must be one of: {string.Join(", ", validCurrencies)}");
-            }
-            else if (request.Currency.Length != 3)
-            {
-                errors.Add("Currency must be exactly 3 characters");
-            }
-
-            // Amount validation
-            if (request.Amount <= 0)
-            {
-                errors.Add("Amount must be a positive integer");
-            }
-
-            // CVV validation
-            if (string.IsNullOrWhiteSpace(request.CVV) || !request.CVV.All(char.IsDigit))
-            {
-                errors.Add("CVV must contain only digits");
-            }
-            else if (request.CVV.Length < 3 || request.CVV.Length > 4)
-            {
-                errors.Add("CVV must be 3 or 4 digits");
-            }
-
-            return errors;
+            return rejectedResponse;
         }
 
         private int GetLastFourDigits(string cardNumber)
